@@ -55,10 +55,13 @@ export function paceToSeconds(paceStr: string): number {
  * Smart parsing of raw OCR text to extract run parameters (Distance, Duration, Pace)
  */
 export function parseOcrText(rawText: string): OcrResult {
+  // Normalize colons and spaces.
   // Normalize colon misreadings: e.g. 0.43.29 -> 0:43:29 or 0;43;29 -> 0:43:29
+  // Also clean up double single quotes or apostrophes in pace (e.g. 6'03'' -> 6'03")
   const cleanedText = rawText
     .replace(/\b(\d{1,2})[\.;](\d{2})[\.;](\d{2})\b/g, '$1:$2:$3')
-    .replace(/\b(\d{1,2})[\.;](\d{2})\b/g, '$1:$2');
+    .replace(/\b(\d{1,2})[\.;](\d{2})\b/g, '$1:$2')
+    .replace(/['`]{2}/g, '"');
 
   const normalizedText = cleanedText.toLowerCase();
 
@@ -79,11 +82,13 @@ export function parseOcrText(rawText: string): OcrResult {
     sourceApp = 'Garmin';
   }
 
-  // 1b. German Date parsing: e.g., "Mi. 1. Juli" or "1. Juli" or "01.07."
-  const dateMatch = normalizedText.match(/\b(?:mo|di|mi|do|fr|sa|so)?\.?\s*(\d{1,2})\.?\s*(januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember|jan|feb|mär|apr|mai|jun|jul|aug|sep|okt|nov|dez)\b/i);
-  if (dateMatch) {
-    const day = parseInt(dateMatch[1]);
-    const monthStr = dateMatch[2];
+  // 1b. German Date parsing: e.g., "Mi. 1. Juli" or "1. Juli" or "01.07.26"
+  const dateMatchMonth = normalizedText.match(/\b(?:mo|di|mi|do|fr|sa|so)?\.?\s*(\d{1,2})\.?\s*(januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember|jan|feb|mär|apr|mai|jun|jul|aug|sep|okt|nov|dez)\b/i);
+  const dateMatchNumeric = normalizedText.match(/\b(\d{1,2})\.(\d{2})\.(\d{2,4})\b/);
+
+  if (dateMatchMonth) {
+    const day = parseInt(dateMatchMonth[1]);
+    const monthStr = dateMatchMonth[2];
     const monthMap: { [key: string]: number } = {
       januar: 1, jan: 1,
       februar: 2, feb: 2,
@@ -103,19 +108,37 @@ export function parseOcrText(rawText: string): OcrResult {
       const year = new Date().getFullYear();
       date = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
     }
+  } else if (dateMatchNumeric) {
+    const day = parseInt(dateMatchNumeric[1]);
+    const month = parseInt(dateMatchNumeric[2]);
+    let yearStr = dateMatchNumeric[3];
+    if (yearStr.length === 2) {
+      yearStr = '20' + yearStr;
+    }
+    const year = parseInt(yearStr);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      date = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+    }
   }
+
+  // Keywords lists for contextual analysis
+  const distKeywords = ['distanz', 'strecke', 'entfernung', 'distance', 'laufstrecke'];
+  const timeKeywords = ['trainingszeit', 'dauer', 'zeit', 'duration', 'time'];
+  const paceKeywords = ['pace', 'tempo', 'ø-pace', 'ø pace', 'durchschnittliche pace', 'avg pace', 'average pace', 'tempo ø', 'tempoø'];
 
   // 2. Extract Distance (km)
   // Find all decimal number candidates and score them based on surrounding context
   let bestDistance: number | null = null;
   let bestScore = -1;
 
-  const decimalRegex = /\b(\d+[\.,]\d{1,2})\b/g;
+  // Match numbers like 7,18 or 10,000 or 5.4 or 12
+  const decimalRegex = /\b(\d+[\.,]\d{1,3})\b/g;
   let decMatch;
   decimalRegex.lastIndex = 0;
 
   while ((decMatch = decimalRegex.exec(cleanedText)) !== null) {
     const numStr = decMatch[1];
+    // In German, 10,000 km might be read as 10.0 or 10
     const val = parseFloat(numStr.replace(',', '.'));
     
     // Ignore unreasonable running distances
@@ -141,12 +164,14 @@ export function parseOcrText(rawText: string): OcrResult {
       score += 50;
     }
 
-    // 2. Check labels like "strecke", "distanz", "distance", "laufstrecke" in the context
-    if (contextText.includes('strecke') || contextText.includes('distanz') || contextText.includes('distance') || contextText.includes('laufstrecke')) {
-      score += 100;
-    }
+    // 2. Check distance keywords in context
+    distKeywords.forEach(keyword => {
+      if (contextText.includes(keyword)) {
+        score += 100;
+      }
+    });
 
-    // 3. Prefer 2 decimal places (typical for run trackers, e.g. 5.42)
+    // 3. Prefer 2 decimal places (typical for run trackers, e.g. 7.18)
     if (numStr.includes('.') || numStr.includes(',')) {
       const decimals = numStr.split(/[\.,]/)[1];
       if (decimals.length === 2) {
@@ -160,14 +185,13 @@ export function parseOcrText(rawText: string): OcrResult {
     }
   }
 
-  // Fallback to original regexes if score-based matching did not yield a confident result
   if (bestDistance !== null && bestScore > 20) {
     distance = bestDistance;
   } else {
-    // Original regex fallback
+    // Fallback to original simple matching
     const distanceRegexes = [
       /(\d+[\.,]\d{1,2})\s*(?:km|kilometer|distanz|distance)\b/i,
-      /(?:distanz|distance|strecke|laufstrecke)\s*(\d+[\.,]\d{1,2})\b/i,
+      /(?:distanz|distance|strecke|entfernung|laufstrecke)\s*(\d+[\.,]\d{1,2})\b/i,
       /\b(\d+[\.,]\d{2})\b/
     ];
     for (const regex of distanceRegexes) {
@@ -182,15 +206,13 @@ export function parseOcrText(rawText: string): OcrResult {
     }
   }
 
-  // 3. Extract Times (Duration / Pace)
+  // 3. Extract Duration (Time)
   // Search for times: "hh:mm:ss" or "mm:ss"
   const timeRegex = /\b(\d{1,2}):(\d{2}):(\d{2})\b/g; // hh:mm:ss
   const shortTimeRegex = /\b(\d{1,2}):(\d{2})\b/g;   // mm:ss
   
   const allTimes: { value: string; index: number; isThreeParts: boolean }[] = [];
-  
   let match;
-  // Reset regex indexes
   timeRegex.lastIndex = 0;
   shortTimeRegex.lastIndex = 0;
 
@@ -198,7 +220,6 @@ export function parseOcrText(rawText: string): OcrResult {
     allTimes.push({ value: match[0], index: match.index, isThreeParts: true });
   }
 
-  // To avoid duplicate matching (since hh:mm:ss contains mm:ss inside), only match short times that aren't part of long times
   while ((match = shortTimeRegex.exec(cleanedText)) !== null) {
     const isPartOfLongTime = allTimes.some(t => 
       t.isThreeParts && 
@@ -210,20 +231,116 @@ export function parseOcrText(rawText: string): OcrResult {
     }
   }
 
-  // Find duration candidate (the longest time string, or if we have multiple, the larger one)
-  const candidates = allTimes.map(t => t.value);
-  const threePart = allTimes.find(t => t.isThreeParts);
-  
-  if (threePart) {
-    duration = threePart.value;
-  } else if (candidates.length > 0) {
-    const secondsValues = candidates.map(c => ({ str: c, secs: durationToSeconds(c) }));
-    secondsValues.sort((a, b) => b.secs - a.secs); // Descending order of duration
+  // Score duration candidates
+  let bestDuration: string | null = null;
+  let bestDurScore = -1;
+
+  allTimes.forEach(t => {
+    let score = 0;
+    const index = t.index;
+    
+    // Check surrounding text
+    const contextStart = Math.max(0, index - 50);
+    const contextEnd = Math.min(cleanedText.length, index + t.value.length + 50);
+    const contextText = cleanedText.slice(contextStart, contextEnd).toLowerCase();
+
+    // 1. Duration keywords in context
+    timeKeywords.forEach(keyword => {
+      if (contextText.includes(keyword)) {
+        score += 100;
+      }
+    });
+
+    // 2. 3-part time is highly likely duration
+    if (t.isThreeParts) {
+      score += 40;
+    }
+
+    // 3. Penalize clock times (usually at the very top of screenshots, index close to 0, e.g. "18:23" or "12:58")
+    if (index < 20) {
+      score -= 80;
+    }
+    // Penalize if it looks like start range "17:30-18:13"
+    if (contextText.includes(t.value + '–') || contextText.includes('–' + t.value) || contextText.includes(t.value + '-')) {
+      score -= 60;
+    }
+
+    if (score > bestDurScore) {
+      bestDurScore = score;
+      bestDuration = t.value;
+    }
+  });
+
+  if (bestDuration) {
+    duration = bestDuration;
+  } else if (allTimes.length > 0) {
+    // Fallback: longest time
+    const secondsValues = allTimes.map(c => ({ str: c.value, secs: durationToSeconds(c.value) }));
+    secondsValues.sort((a, b) => b.secs - a.secs);
     duration = secondsValues[0].str;
   }
 
-  // 4. Calculate Pace purely based on Distance and Duration
-  if (distance && duration) {
+  // 4. Extract Pace (if explicitly present in text)
+  // Check for apple fitness pace format: e.g. "6'03" / KM" or "6'03""
+  // Regular expressions to find pace formats:
+  const applePaceRegex = /(\d{1,2})['`‘](\d{2})"/g;
+  const applePaceRegexSimple = /(\d{1,2})['`‘](\d{2})\b/g;
+  
+  let paceCandidates: { value: string; index: number }[] = [];
+  let paceMatch;
+
+  applePaceRegex.lastIndex = 0;
+  while ((paceMatch = applePaceRegex.exec(cleanedText)) !== null) {
+    paceCandidates.push({ value: `${paceMatch[1]}:${paceMatch[2]}`, index: paceMatch.index });
+  }
+
+  if (paceCandidates.length === 0) {
+    applePaceRegexSimple.lastIndex = 0;
+    while ((paceMatch = applePaceRegexSimple.exec(cleanedText)) !== null) {
+      paceCandidates.push({ value: `${paceMatch[1]}:${paceMatch[2]}`, index: paceMatch.index });
+    }
+  }
+
+  // Also check standard times followed by min/km or /km as pace candidates
+  const standardPaceRegex = /\b(\d{1,2}):(\d{2})\s*(?:\/km|min\/km|pace|tempo)/gi;
+  standardPaceRegex.lastIndex = 0;
+  while ((paceMatch = standardPaceRegex.exec(cleanedText)) !== null) {
+    paceCandidates.push({ value: `${paceMatch[1]}:${paceMatch[2]}`, index: paceMatch.index });
+  }
+
+  // Score pace candidates
+  let bestPace: string | null = null;
+  let bestPaceScore = -1;
+
+  paceCandidates.forEach(p => {
+    let score = 0;
+    const index = p.index;
+    const contextStart = Math.max(0, index - 50);
+    const contextEnd = Math.min(cleanedText.length, index + 15 + 50);
+    const contextText = cleanedText.slice(contextStart, contextEnd).toLowerCase();
+
+    // 1. Pace keywords in context
+    paceKeywords.forEach(keyword => {
+      if (contextText.includes(keyword)) {
+        score += 120;
+      }
+    });
+
+    // 2. Unit suffix matching
+    if (contextText.includes('/km') || contextText.includes('min/km') || contextText.includes('/ km') || contextText.includes('min / km')) {
+      score += 150;
+    }
+
+    if (score > bestPaceScore) {
+      bestPaceScore = score;
+      bestPace = p.value;
+    }
+  });
+
+  // If we found a confident pace, use it. Otherwise, calculate it mathematically.
+  if (bestPace && bestPaceScore > 40) {
+    pace = bestPace;
+  } else if (distance && duration) {
     const durSecs = durationToSeconds(duration);
     if (durSecs > 0 && distance > 0) {
       const paceSecs = durSecs / distance;
