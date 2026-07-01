@@ -444,12 +444,18 @@ export default function App() {
         </div>
         
         <div className="header-actions">
-          {runs.length > 0 && (
-            <button className="btn btn-primary" onClick={handleExport}>
-              <FileSpreadsheet size={18} />
-              Excel Tabelle exportieren
-            </button>
-          )}
+          <button 
+            className="btn btn-primary" 
+            onClick={handleExport}
+            disabled={runs.length === 0}
+            style={{ 
+              opacity: runs.length === 0 ? 0.5 : 1, 
+              cursor: runs.length === 0 ? 'not-allowed' : 'pointer' 
+            }}
+          >
+            <FileSpreadsheet size={18} />
+            Excel Tabelle exportieren
+          </button>
         </div>
       </header>
 
