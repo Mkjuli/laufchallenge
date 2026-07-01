@@ -97,17 +97,19 @@ export default function App() {
     }
   };
 
-  // Load from database on mount & listen for window focus to pull latest data
+  // Load from database on mount & listen for visibility change to pull latest data
   useEffect(() => {
     fetchFromDatabase();
 
-    const handleFocus = () => {
-      fetchFromDatabase();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchFromDatabase();
+      }
     };
 
-    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
-      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
