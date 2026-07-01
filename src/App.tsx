@@ -11,7 +11,8 @@ import {
   Check,
   X,
   PlusCircle,
-  Edit2
+  Edit2,
+  Database
 } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
@@ -857,6 +858,84 @@ export default function App() {
                 </button>
               )}
             </form>
+          </div>
+
+          {/* Backup & Restore Card */}
+          <div className="card">
+            <h2 className="card-title">
+              <Database size={20} style={{ color: 'var(--accent-purple)' }} />
+              Daten übertragen (Backup)
+            </h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Da Ihre Daten lokal im Browser gespeichert werden, können Sie diese hier exportieren und auf einer anderen Domain (z.B. Ihrer Hauptdomain) importieren.
+              </p>
+              
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                style={{ width: '100%' }}
+                onClick={() => {
+                  const data = { runs, runners };
+                  navigator.clipboard.writeText(JSON.stringify(data));
+                  alert('Backup-Code wurde kopiert! Fügen Sie diesen Code auf Ihrer Hauptdomain ein.');
+                }}
+                disabled={runs.length === 0}
+              >
+                Backup-Code kopieren (Export)
+              </button>
+
+              <div className="form-group" style={{ marginTop: '0.5rem' }}>
+                <label>Backup-Code einfügen (Import)</label>
+                <textarea 
+                  placeholder="Füge den Code hier ein..."
+                  id="backup-input"
+                  style={{ 
+                    width: '100%', 
+                    height: '60px', 
+                    background: 'rgba(0,0,0,0.25)', 
+                    border: '1px solid var(--border-light)', 
+                    borderRadius: '0.5rem',
+                    color: 'var(--text-primary)',
+                    padding: '0.5rem',
+                    fontFamily: 'monospace',
+                    fontSize: '0.75rem',
+                    resize: 'none'
+                  }}
+                />
+                <button 
+                  type="button" 
+                  className="btn btn-accent" 
+                  style={{ marginTop: '0.5rem', width: '100%' }}
+                  onClick={() => {
+                    const textarea = document.getElementById('backup-input') as HTMLTextAreaElement;
+                    if (!textarea || !textarea.value.trim()) {
+                      alert('Bitte fügen Sie einen gültigen Backup-Code ein.');
+                      return;
+                    }
+                    try {
+                      const parsed = JSON.parse(textarea.value.trim());
+                      if (parsed && Array.isArray(parsed.runs) && Array.isArray(parsed.runners)) {
+                        if (window.confirm('Daten jetzt importieren? Vorhandene Läufe auf dieser Domain werden überschrieben.')) {
+                          saveRunsToLocalStorage(parsed.runs);
+                          setRunners(parsed.runners);
+                          localStorage.setItem('running_group_runners', JSON.stringify(parsed.runners));
+                          textarea.value = '';
+                          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+                          alert('Daten erfolgreich übertragen!');
+                        }
+                      } else {
+                        alert('Ungültiger Backup-Code. Bitte prüfen Sie den kopierten Text.');
+                      }
+                    } catch (e) {
+                      alert('Fehler beim Einlesen. Bitte stellen Sie sicher, dass Sie den gesamten Code kopiert haben.');
+                    }
+                  }}
+                >
+                  Daten einspielen
+                </button>
+              </div>
+            </div>
           </div>
           
         </div>
