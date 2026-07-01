@@ -23,81 +23,12 @@ import { exportToExcel } from './utils/excelExporter';
 // Formats date to YYYY-MM-DD
 const getTodayString = () => new Date().toISOString().split('T')[0];
 
-// Generates historical dates relative to today
-const getRelativeDateString = (daysAgo: number) => {
-  const d = new Date();
-  d.setDate(d.getDate() - daysAgo);
-  return d.toISOString().split('T')[0];
-};
 
-// Initial Mock Data
-const INITIAL_RUNS: Run[] = [
-  {
-    id: 'mock-1',
-    runnerName: 'Julian',
-    date: getRelativeDateString(1),
-    distance: 10.25,
-    duration: '52:15',
-    pace: '5:05',
-    sourceApp: 'Apple Fitness',
-    timestamp: Date.parse(getRelativeDateString(1))
-  },
-  {
-    id: 'mock-2',
-    runnerName: 'Sarah',
-    date: getRelativeDateString(2),
-    distance: 8.50,
-    duration: '46:45',
-    pace: '5:30',
-    sourceApp: 'Adidas Running',
-    timestamp: Date.parse(getRelativeDateString(2))
-  },
-  {
-    id: 'mock-3',
-    runnerName: 'Max',
-    date: getRelativeDateString(2),
-    distance: 5.10,
-    duration: '24:12',
-    pace: '4:45',
-    sourceApp: 'Strava',
-    timestamp: Date.parse(getRelativeDateString(2))
-  },
-  {
-    id: 'mock-4',
-    runnerName: 'Julian',
-    date: getRelativeDateString(4),
-    distance: 12.00,
-    duration: '1:02:24',
-    pace: '5:12',
-    sourceApp: 'Garmin',
-    timestamp: Date.parse(getRelativeDateString(4))
-  },
-  {
-    id: 'mock-5',
-    runnerName: 'Sarah',
-    date: getRelativeDateString(5),
-    distance: 5.00,
-    duration: '28:30',
-    pace: '5:42',
-    sourceApp: 'Apple Fitness',
-    timestamp: Date.parse(getRelativeDateString(5))
-  },
-  {
-    id: 'mock-6',
-    runnerName: 'Emma',
-    date: getRelativeDateString(6),
-    distance: 6.20,
-    duration: '38:12',
-    pace: '6:10',
-    sourceApp: 'Manuell',
-    timestamp: Date.parse(getRelativeDateString(6))
-  }
-];
 
 export default function App() {
   // State
   const [runs, setRuns] = useState<Run[]>([]);
-  const [runners, setRunners] = useState<string[]>(['Julian', 'Sarah', 'Max', 'Emma']);
+  const [runners, setRunners] = useState<string[]>(['Julian', 'Cedde', 'Tim', 'Joni', 'Malte']);
   const [showNewRunnerInput, setShowNewRunnerInput] = useState(false);
   const [newRunnerName, setNewRunnerName] = useState('');
 
@@ -129,18 +60,26 @@ export default function App() {
 
   // Load from local storage on mount
   useEffect(() => {
+    const targetRunners = ['Julian', 'Cedde', 'Tim', 'Joni', 'Malte'];
     const savedRuns = localStorage.getItem('running_group_runs');
-    const savedRunners = localStorage.getItem('running_group_runners');
     
-    if (savedRuns) {
-      setRuns(JSON.parse(savedRuns));
-    } else {
-      setRuns(INITIAL_RUNS);
-      localStorage.setItem('running_group_runs', JSON.stringify(INITIAL_RUNS));
-    }
+    // Force reset runners list to the new defaults
+    localStorage.setItem('running_group_runners', JSON.stringify(targetRunners));
+    setRunners(targetRunners);
 
-    if (savedRunners) {
-      setRunners(JSON.parse(savedRunners));
+    if (savedRuns) {
+      const parsedRuns = JSON.parse(savedRuns);
+      // Clear out the historical mock runs if they are still in localStorage
+      const hasMockRuns = parsedRuns.some((r: any) => r.id && r.id.startsWith('mock-'));
+      if (hasMockRuns) {
+        setRuns([]);
+        localStorage.setItem('running_group_runs', JSON.stringify([]));
+      } else {
+        setRuns(parsedRuns);
+      }
+    } else {
+      setRuns([]);
+      localStorage.setItem('running_group_runs', JSON.stringify([]));
     }
   }, []);
 

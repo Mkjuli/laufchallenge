@@ -171,11 +171,17 @@ export function parseOcrText(rawText: string): OcrResult {
     const immediateAfterEnd = Math.min(searchAreaForDistanceAndDuration.length, immediateAfterStart + 15);
     const immediateAfter = searchAreaForDistanceAndDuration.slice(immediateAfterStart, immediateAfterEnd).toLowerCase();
 
-    // 1. Check unit "km" immediately following
-    if (/^\s*km\b/.test(immediateAfter) || /^\s*kilometer\b/.test(immediateAfter)) {
+    // 1. Check unit "km" immediately following (excluding km/h speed units)
+    if (/^\s*km\/h/i.test(immediateAfter) || /^\s*kmh/i.test(immediateAfter) || /^\s*km\/std/i.test(immediateAfter)) {
+      score -= 250; // Heavily penalize speed values
+    } else if (/^\s*km\b/.test(immediateAfter) || /^\s*kilometer\b/.test(immediateAfter)) {
       score += 150;
     } else if (contextText.includes('km') || contextText.includes('kilometer')) {
-      score += 50;
+      if (contextText.includes('km/h') || contextText.includes('kmh') || contextText.includes('geschw') || contextText.includes('speed') || contextText.includes('geschwindigkeit')) {
+        score -= 250;
+      } else {
+        score += 50;
+      }
     }
 
     // 2. Check distance keywords in context
