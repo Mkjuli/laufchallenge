@@ -72,7 +72,16 @@ export function parseOcrText(rawText: string): OcrResult {
   let sourceApp = 'Unbekannt';
 
   // 1. Detect Source App
-  if (normalizedText.includes('fitness') || normalizedText.includes('aktivität') || normalizedText.includes('ringe') || normalizedText.includes('workout')) {
+  const isAppleFitness = normalizedText.includes('fitness') || 
+                         normalizedText.includes('aktivität') || 
+                         normalizedText.includes('ringe') || 
+                         normalizedText.includes('workout') || 
+                         normalizedText.includes('trainingsdetails') || 
+                         normalizedText.includes('trainingszeit') || 
+                         normalizedText.includes('strecke') || 
+                         normalizedText.includes('aktivitätskilokalorien');
+
+  if (isAppleFitness) {
     sourceApp = 'Apple Fitness';
   } else if (normalizedText.includes('adidas') || normalizedText.includes('runtastic') || normalizedText.includes('adidas running')) {
     sourceApp = 'Adidas Running';
@@ -121,24 +130,32 @@ export function parseOcrText(rawText: string): OcrResult {
     }
   }
 
+  // --- Apple Fitness Heuristic: Split into Upper and Lower Half ---
+  // Distance and Duration are always in the upper half of Apple Fitness.
+  // Cadence, Heart rate, Power, and Pace are in the lower half.
+  // We restrict searching for Distance and Duration to the upper half to prevent layout confusion.
+  let searchAreaForDistanceAndDuration = cleanedText;
+  if (sourceApp === 'Apple Fitness') {
+    const lines = cleanedText.split('\n');
+    const midIndex = Math.ceil(lines.length * 0.55);
+    searchAreaForDistanceAndDuration = lines.slice(0, midIndex).join('\n');
+  }
+
   // Keywords lists for contextual analysis
   const distKeywords = ['distanz', 'strecke', 'entfernung', 'distance', 'laufstrecke'];
   const timeKeywords = ['trainingszeit', 'dauer', 'zeit', 'duration', 'time'];
   const paceKeywords = ['pace', 'tempo', 'ø-pace', 'ø pace', 'durchschnittliche pace', 'avg pace', 'average pace', 'tempo ø', 'tempoø'];
 
   // 2. Extract Distance (km)
-  // Find all decimal number candidates and score them based on surrounding context
   let bestDistance: number | null = null;
   let bestScore = -1;
 
-  // Match numbers like 7,18 or 10,000 or 5.4 or 12
   const decimalRegex = /\b(\d+[\.,]\d{1,3})\b/g;
   let decMatch;
   decimalRegex.lastIndex = 0;
 
-  while ((decMatch = decimalRegex.exec(cleanedText)) !== null) {
+  while ((decMatch = decimalRegex.exec(searchAreaForDistanceAndDuration)) !== null) {
     const numStr = decMatch[1];
-    // In German, 10,000 km might be read as 10.0 or 10
     const val = parseFloat(numStr.replace(',', '.'));
     
     // Ignore unreasonable running distances
@@ -149,13 +166,13 @@ export function parseOcrText(rawText: string): OcrResult {
 
     // Check surrounding text (50 characters before and after)
     const contextStart = Math.max(0, index - 50);
-    const contextEnd = Math.min(cleanedText.length, index + numStr.length + 50);
-    const contextText = cleanedText.slice(contextStart, contextEnd).toLowerCase();
+    const contextEnd = Math.min(searchAreaForDistanceAndDuration.length, index + numStr.length + 50);
+    const contextText = searchAreaForDistanceAndDuration.slice(contextStart, contextEnd).toLowerCase();
     
     // Check immediate text following the number
     const immediateAfterStart = index + numStr.length;
-    const immediateAfterEnd = Math.min(cleanedText.length, immediateAfterStart + 15);
-    const immediateAfter = cleanedText.slice(immediateAfterStart, immediateAfterEnd).toLowerCase();
+    const immediateAfterEnd = Math.min(searchAreaForDistanceAndDuration.length, immediateAfterStart + 15);
+    const immediateAfter = searchAreaForDistanceAndDuration.slice(immediateAfterStart, immediateAfterEnd).toLowerCase();
 
     // 1. Check unit "km" immediately following
     if (/^\s*km\b/.test(immediateAfter) || /^\s*kilometer\b/.test(immediateAfter)) {
@@ -188,14 +205,14 @@ export function parseOcrText(rawText: string): OcrResult {
   if (bestDistance !== null && bestScore > 20) {
     distance = bestDistance;
   } else {
-    // Fallback to original simple matching
+    // Fallback simple matching in the restricted area
     const distanceRegexes = [
       /(\d+[\.,]\d{1,2})\s*(?:km|kilometer|distanz|distance)\b/i,
       /(?:distanz|distance|strecke|entfernung|laufstrecke)\s*(\d+[\.,]\d{1,2})\b/i,
       /\b(\d+[\.,]\d{2})\b/
     ];
     for (const regex of distanceRegexes) {
-      const match = cleanedText.match(regex);
+      const match = searchAreaForDistanceAndDuration.match(regex);
       if (match && match[1]) {
         const parsedVal = parseFloat(match[1].replace(',', '.'));
         if (parsedVal > 0 && parsedVal < 150) {
@@ -207,7 +224,6 @@ export function parseOcrText(rawText: string): OcrResult {
   }
 
   // 3. Extract Duration (Time)
-  // Search for times: "hh:mm:ss" or "mm:ss"
   const timeRegex = /\b(\d{1,2}):(\d{2}):(\d{2})\b/g; // hh:mm:ss
   const shortTimeRegex = /\b(\d{1,2}):(\d{2})\b/g;   // mm:ss
   
@@ -216,11 +232,11 @@ export function parseOcrText(rawText: string): OcrResult {
   timeRegex.lastIndex = 0;
   shortTimeRegex.lastIndex = 0;
 
-  while ((match = timeRegex.exec(cleanedText)) !== null) {
+  while ((match = timeRegex.exec(searchAreaForDistanceAndDuration)) !== null) {
     allTimes.push({ value: match[0], index: match.index, isThreeParts: true });
   }
 
-  while ((match = shortTimeRegex.exec(cleanedText)) !== null) {
+  while ((match = shortTimeRegex.exec(searchAreaForDistanceAndDuration)) !== null) {
     const isPartOfLongTime = allTimes.some(t => 
       t.isThreeParts && 
       match!.index >= t.index && 
@@ -241,8 +257,8 @@ export function parseOcrText(rawText: string): OcrResult {
     
     // Check surrounding text
     const contextStart = Math.max(0, index - 50);
-    const contextEnd = Math.min(cleanedText.length, index + t.value.length + 50);
-    const contextText = cleanedText.slice(contextStart, contextEnd).toLowerCase();
+    const contextEnd = Math.min(searchAreaForDistanceAndDuration.length, index + t.value.length + 50);
+    const contextText = searchAreaForDistanceAndDuration.slice(contextStart, contextEnd).toLowerCase();
 
     // 1. Duration keywords in context
     timeKeywords.forEach(keyword => {
@@ -256,11 +272,11 @@ export function parseOcrText(rawText: string): OcrResult {
       score += 40;
     }
 
-    // 3. Penalize clock times (usually at the very top of screenshots, index close to 0, e.g. "18:23" or "12:58")
+    // 3. Penalize clock times (usually at the very top of screenshots)
     if (index < 20) {
       score -= 80;
     }
-    // Penalize if it looks like start range "17:30-18:13"
+    // Penalize if it looks like start range
     if (contextText.includes(t.value + '–') || contextText.includes('–' + t.value) || contextText.includes(t.value + '-')) {
       score -= 60;
     }
@@ -280,9 +296,7 @@ export function parseOcrText(rawText: string): OcrResult {
     duration = secondsValues[0].str;
   }
 
-  // 4. Extract Pace (if explicitly present in text)
-  // Check for apple fitness pace format: e.g. "6'03" / KM" or "6'03""
-  // Regular expressions to find pace formats:
+  // 4. Extract Pace (Pace can be anywhere in the text)
   const applePaceRegex = /(\d{1,2})['`‘](\d{2})"/g;
   const applePaceRegexSimple = /(\d{1,2})['`‘](\d{2})\b/g;
   
@@ -337,14 +351,52 @@ export function parseOcrText(rawText: string): OcrResult {
     }
   });
 
-  // If we found a confident pace, use it. Otherwise, calculate it mathematically.
   if (bestPace && bestPaceScore > 40) {
     pace = bestPace;
-  } else if (distance && duration) {
-    const durSecs = durationToSeconds(duration);
-    if (durSecs > 0 && distance > 0) {
-      const paceSecs = durSecs / distance;
-      pace = secondsToPace(paceSecs);
+  }
+
+  // 5. Confidence checks & reciprocal calculation fallbacks
+  // We check which values are found and are highly confident.
+  // If we are unconfident about one value, we re-calculate it from the other two!
+  const isDistConfident = distance !== null && bestScore >= 60;
+  const isDurConfident = duration !== null && bestDurScore >= 40;
+  const isPaceConfident = pace !== null && bestPaceScore >= 40;
+
+  if (isDistConfident && isDurConfident && !isPaceConfident) {
+    // Distance and duration are reliable, pace is unconfident/missing. Compute it!
+    const durSecs = durationToSeconds(duration!);
+    if (durSecs > 0 && distance! > 0) {
+      pace = secondsToPace(durSecs / distance!);
+    }
+  } else if (isDistConfident && isPaceConfident && !isDurConfident) {
+    // Distance and pace are reliable, duration is unconfident/missing. Compute it!
+    const paceSecs = paceToSeconds(pace!);
+    if (paceSecs > 0 && distance! > 0) {
+      duration = secondsToDuration(distance! * paceSecs);
+    }
+  } else if (isDurConfident && isPaceConfident && !isDistConfident) {
+    // Duration and pace are reliable, distance is unconfident/missing. Compute it!
+    const durSecs = durationToSeconds(duration!);
+    const paceSecs = paceToSeconds(pace!);
+    if (paceSecs > 0 && durSecs > 0) {
+      distance = Math.round((durSecs / paceSecs) * 100) / 100;
+    }
+  } else {
+    // Standard mathematical recovery if values are missing but others are present
+    const hasDist = distance !== null && distance > 0;
+    const hasDur = duration !== null && durationToSeconds(duration) > 0;
+    const hasPace = pace !== null && paceToSeconds(pace) > 0;
+
+    if (hasDist && hasDur && !hasPace) {
+      const durSecs = durationToSeconds(duration!);
+      pace = secondsToPace(durSecs / distance!);
+    } else if (hasDist && !hasDur && hasPace) {
+      const paceSecs = paceToSeconds(pace!);
+      duration = secondsToDuration(distance! * paceSecs);
+    } else if (!hasDist && hasDur && hasPace) {
+      const durSecs = durationToSeconds(duration!);
+      const paceSecs = paceToSeconds(pace!);
+      distance = Math.round((durSecs / paceSecs) * 100) / 100;
     }
   }
 
