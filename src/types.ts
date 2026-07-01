@@ -23,4 +23,5 @@ export interface OcrResult {
   pace: string | null;
   sourceApp: string;
   rawText: string;
+  date?: string | null;
 }

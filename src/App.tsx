@@ -214,7 +214,7 @@ export default function App() {
         setConfirmDuration(parsed.duration || '');
         setConfirmPace(parsed.pace || '');
         setConfirmSourceApp(parsed.sourceApp !== 'Unbekannt' ? parsed.sourceApp : 'Apple Fitness');
-        setConfirmDate(getTodayString());
+        setConfirmDate(parsed.date || getTodayString());
         
         // Auto-match runner name from context if possible
         if (runners.length > 0) {
