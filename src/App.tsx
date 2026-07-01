@@ -12,10 +12,14 @@ import {
   X,
   PlusCircle,
   Edit2,
-  Database
+  Database,
+  Lock,
+  ShieldCheck,
+  FileUp
 } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import confetti from 'canvas-confetti';
+import * as XLSX from 'xlsx';
 
 import type { Run, RunnerStats, OcrResult } from './types';
 import { parseOcrText, durationToSeconds, secondsToDuration, secondsToPace } from './utils/ocrParser';
@@ -58,6 +62,8 @@ export default function App() {
   const [confirmSourceApp, setConfirmSourceApp] = useState('Apple Fitness');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const excelInputRef = useRef<HTMLInputElement>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Load from local storage on mount
   useEffect(() => {
@@ -324,6 +330,144 @@ export default function App() {
     }
   };
 
+  const handleAdminToggle = () => {
+    if (isAdmin) {
+      setIsAdmin(false);
+      alert('Admin-Modus beenden.');
+    } else {
+      const pw = prompt('Bitte Admin-Passwort eingeben (Standard: laufchallenge):');
+      if (pw === 'laufchallenge') {
+        setIsAdmin(true);
+        confetti({ particleCount: 30, spread: 40 });
+      } else if (pw !== null) {
+        alert('Falsches Passwort!');
+      }
+    }
+  };
+
+  const handleExcelImport = (file: File) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+        
+        let headerRowIndex = -1;
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          if (row && row.some(cell => typeof cell === 'string' && (cell.toLowerCase().includes('datum') || cell.toLowerCase().includes('läufer')))) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        
+        if (headerRowIndex === -1) {
+          alert('Ungültiges Excel-Format. Die Spalten "Datum" und "Läufer" wurden nicht gefunden.');
+          return;
+        }
+        
+        const headers = rows[headerRowIndex].map(h => String(h || '').trim().toLowerCase());
+        const dateIdx = headers.indexOf('datum');
+        const runnerIdx = headers.indexOf('läufer');
+        const distIdx = headers.indexOf('distanz') !== -1 ? headers.indexOf('distanz') : headers.findIndex(h => h.includes('km') || h.includes('strecke'));
+        const durIdx = headers.indexOf('dauer') !== -1 ? headers.indexOf('dauer') : headers.findIndex(h => h.includes('zeit'));
+        const paceIdx = headers.indexOf('pace') !== -1 ? headers.indexOf('pace') : headers.findIndex(h => h.includes('tempo'));
+        const sourceIdx = headers.indexOf('quelle / app') !== -1 ? headers.indexOf('quelle / app') : headers.indexOf('quelle');
+        
+        if (dateIdx === -1 || runnerIdx === -1) {
+          alert('Spalten für Datum oder Läufer konnten nicht identifiziert werden.');
+          return;
+        }
+        
+        const newRuns: Run[] = [];
+        const newRunnersList = [...runners];
+        
+        for (let i = headerRowIndex + 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length === 0) continue;
+          
+          // Skip summary / total row
+          const firstCell = String(row[0] || '').toLowerCase();
+          if (firstCell.includes('gesamt') || firstCell.includes('schnitt') || firstCell.trim() === '') continue;
+          
+          // Parse date (Excel date serial number or string)
+          let dateVal = row[dateIdx];
+          if (typeof dateVal === 'number') {
+            const dateObj = XLSX.SSF.parse_date_code(dateVal);
+            dateVal = `${dateObj.y}-${dateObj.m.toString().padStart(2, '0')}-${dateObj.d.toString().padStart(2, '0')}`;
+          } else if (typeof dateVal === 'string') {
+            const parts = dateVal.trim().split('.');
+            if (parts.length === 3) {
+              dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+            }
+          }
+          
+          const runnerVal = String(row[runnerIdx] || '').trim();
+          if (!runnerVal || !dateVal) continue;
+          
+          // Parse distance
+          let distVal = row[distIdx];
+          if (typeof distVal === 'string') {
+            distVal = parseFloat(distVal.replace(/[^\d\.,]/g, '').replace(',', '.'));
+          }
+          distVal = Number(distVal);
+          if (isNaN(distVal) || distVal <= 0) continue;
+          
+          // Parse duration & pace
+          const durVal = String(row[durIdx] || '').trim();
+          let paceVal = String(row[paceIdx] || '').trim().replace(' min/km', '');
+          
+          if ((!paceVal || paceVal === 'undefined') && durVal) {
+            const durSecs = durationToSeconds(durVal);
+            if (durSecs > 0 && distVal > 0) {
+              paceVal = secondsToPace(durSecs / distVal);
+            }
+          }
+          
+          const sourceAppVal = sourceIdx !== -1 ? String(row[sourceIdx] || 'Excel Import').trim() : 'Excel Import';
+          
+          newRuns.push({
+            id: 'run-excel-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+            runnerName: runnerVal,
+            date: String(dateVal),
+            distance: distVal,
+            duration: durVal,
+            pace: paceVal || '5:00',
+            sourceApp: sourceAppVal,
+            timestamp: Date.parse(String(dateVal))
+          });
+          
+          if (!newRunnersList.includes(runnerVal)) {
+            newRunnersList.push(runnerVal);
+          }
+        }
+        
+        if (newRuns.length === 0) {
+          alert('Keine gültigen Läufe zum Importieren gefunden.');
+          return;
+        }
+        
+        const mergedRuns = [...newRuns, ...runs];
+        saveRunsToLocalStorage(mergedRuns);
+        
+        // Sync runners list
+        setRunners(newRunnersList);
+        localStorage.setItem('running_group_runners', JSON.stringify(newRunnersList));
+        
+        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        alert(`${newRuns.length} Läufe erfolgreich aus der Excel-Tabelle importiert!`);
+      } catch (err) {
+        console.error('Excel Import Fehler:', err);
+        alert('Fehler beim Lesen der Excel-Datei. Stellen Sie sicher, dass es sich um eine gültige Datei handelt.');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   // Calculations
   const totalGroupRuns = runs.length;
   
@@ -383,7 +527,7 @@ export default function App() {
           </div>
         </div>
         
-        <div className="header-actions">
+        <div className="header-actions" style={{ display: 'flex', gap: '0.75rem' }}>
           <button 
             className="btn btn-primary" 
             onClick={handleExport}
@@ -395,6 +539,21 @@ export default function App() {
           >
             <FileSpreadsheet size={18} />
             Excel Tabelle exportieren
+          </button>
+
+          <button 
+            className="btn btn-secondary" 
+            onClick={handleAdminToggle}
+            style={{ 
+              border: isAdmin ? '1px solid var(--accent-cyan)' : '1px solid var(--border-light)',
+              color: isAdmin ? 'var(--accent-cyan)' : 'var(--text-primary)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}
+          >
+            {isAdmin ? <ShieldCheck size={18} /> : <Lock size={18} />}
+            {isAdmin ? 'Admin aktiv' : 'Admin-Bereich'}
           </button>
         </div>
       </header>
@@ -860,83 +1019,134 @@ export default function App() {
             </form>
           </div>
 
-          {/* Backup & Restore Card */}
-          <div className="card">
-            <h2 className="card-title">
-              <Database size={20} style={{ color: 'var(--accent-purple)' }} />
-              Daten übertragen (Backup)
-            </h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Da Ihre Daten lokal im Browser gespeichert werden, können Sie diese hier exportieren und auf einer anderen Domain (z.B. Ihrer Hauptdomain) importieren.
-              </p>
+          {/* Admin Panel (Visible ONLY if isAdmin is true) */}
+          {isAdmin && (
+            <div className="card" style={{ border: '1px solid var(--accent-purple)' }}>
+              <h2 className="card-title">
+                <Lock size={20} style={{ color: 'var(--accent-purple)' }} />
+                Admin Panel
+              </h2>
               
-              <button 
-                type="button" 
-                className="btn btn-secondary" 
-                style={{ width: '100%' }}
-                onClick={() => {
-                  const data = { runs, runners };
-                  navigator.clipboard.writeText(JSON.stringify(data));
-                  alert('Backup-Code wurde kopiert! Fügen Sie diesen Code auf Ihrer Hauptdomain ein.');
-                }}
-                disabled={runs.length === 0}
-              >
-                Backup-Code kopieren (Export)
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                
+                {/* Excel Import Section */}
+                <div style={{ paddingBottom: '1rem', borderBottom: '1px solid var(--border-light)' }}>
+                  <h3 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FileUp size={16} /> Excel-Tabelle importieren
+                  </h3>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                    Lade eine zuvor exportierte Excel-Datei hoch, um alle Läufe direkt in die App einzulesen.
+                  </p>
+                  
+                  <input 
+                    type="file" 
+                    ref={excelInputRef} 
+                    accept=".xlsx,.xls" 
+                    style={{ display: 'none' }} 
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleExcelImport(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary" 
+                    style={{ width: '100%' }}
+                    onClick={() => excelInputRef.current?.click()}
+                  >
+                    Excel-Datei auswählen
+                  </button>
+                </div>
 
-              <div className="form-group" style={{ marginTop: '0.5rem' }}>
-                <label>Backup-Code einfügen (Import)</label>
-                <textarea 
-                  placeholder="Füge den Code hier ein..."
-                  id="backup-input"
-                  style={{ 
-                    width: '100%', 
-                    height: '60px', 
-                    background: 'rgba(0,0,0,0.25)', 
-                    border: '1px solid var(--border-light)', 
-                    borderRadius: '0.5rem',
-                    color: 'var(--text-primary)',
-                    padding: '0.5rem',
-                    fontFamily: 'monospace',
-                    fontSize: '0.75rem',
-                    resize: 'none'
-                  }}
-                />
+                {/* Backup & Restore Section */}
+                <div>
+                  <h3 style={{ fontSize: '0.9rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Database size={16} /> Daten übertragen (Backup)
+                  </h3>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                    Da Ihre Daten lokal im Browser gespeichert werden, können Sie diese hier exportieren und auf einer anderen Domain (z.B. Ihrer Hauptdomain) importieren.
+                  </p>
+                  
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary" 
+                    style={{ width: '100%', marginBottom: '0.75rem' }}
+                    onClick={() => {
+                      const data = { runs, runners };
+                      navigator.clipboard.writeText(JSON.stringify(data));
+                      alert('Backup-Code wurde kopiert! Fügen Sie diesen Code auf Ihrer Hauptdomain ein.');
+                    }}
+                    disabled={runs.length === 0}
+                  >
+                    Backup-Code kopieren (Export)
+                  </button>
+
+                  <div className="form-group">
+                    <label style={{ fontSize: '0.7rem' }}>Backup-Code einspielen (Import)</label>
+                    <textarea 
+                      placeholder="Füge den Code hier ein..."
+                      id="backup-input"
+                      style={{ 
+                        width: '100%', 
+                        height: '50px', 
+                        background: 'rgba(0,0,0,0.25)', 
+                        border: '1px solid var(--border-light)', 
+                        borderRadius: '0.5rem',
+                        color: 'var(--text-primary)',
+                        padding: '0.5rem',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                        resize: 'none'
+                      }}
+                    />
+                    <button 
+                      type="button" 
+                      className="btn btn-accent" 
+                      style={{ marginTop: '0.5rem', width: '100%' }}
+                      onClick={() => {
+                        const textarea = document.getElementById('backup-input') as HTMLTextAreaElement;
+                        if (!textarea || !textarea.value.trim()) {
+                          alert('Bitte fügen Sie einen gültigen Backup-Code ein.');
+                          return;
+                        }
+                        try {
+                          const parsed = JSON.parse(textarea.value.trim());
+                          if (parsed && Array.isArray(parsed.runs) && Array.isArray(parsed.runners)) {
+                            if (window.confirm('Daten jetzt importieren? Vorhandene Läufe auf dieser Domain werden überschrieben.')) {
+                              saveRunsToLocalStorage(parsed.runs);
+                              setRunners(parsed.runners);
+                              localStorage.setItem('running_group_runners', JSON.stringify(parsed.runners));
+                              textarea.value = '';
+                              confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+                              alert('Daten erfolgreich übertragen!');
+                            }
+                          } else {
+                            alert('Ungültiger Backup-Code. Bitte prüfen Sie den kopierten Text.');
+                          }
+                        } catch (e) {
+                          alert('Fehler beim Einlesen. Bitte stellen Sie sicher, dass Sie den gesamten Code kopiert haben.');
+                        }
+                      }}
+                    >
+                      Daten einspielen
+                    </button>
+                  </div>
+                </div>
+
+                {/* Logout Button */}
                 <button 
                   type="button" 
-                  className="btn btn-accent" 
-                  style={{ marginTop: '0.5rem', width: '100%' }}
-                  onClick={() => {
-                    const textarea = document.getElementById('backup-input') as HTMLTextAreaElement;
-                    if (!textarea || !textarea.value.trim()) {
-                      alert('Bitte fügen Sie einen gültigen Backup-Code ein.');
-                      return;
-                    }
-                    try {
-                      const parsed = JSON.parse(textarea.value.trim());
-                      if (parsed && Array.isArray(parsed.runs) && Array.isArray(parsed.runners)) {
-                        if (window.confirm('Daten jetzt importieren? Vorhandene Läufe auf dieser Domain werden überschrieben.')) {
-                          saveRunsToLocalStorage(parsed.runs);
-                          setRunners(parsed.runners);
-                          localStorage.setItem('running_group_runners', JSON.stringify(parsed.runners));
-                          textarea.value = '';
-                          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-                          alert('Daten erfolgreich übertragen!');
-                        }
-                      } else {
-                        alert('Ungültiger Backup-Code. Bitte prüfen Sie den kopierten Text.');
-                      }
-                    } catch (e) {
-                      alert('Fehler beim Einlesen. Bitte stellen Sie sicher, dass Sie den gesamten Code kopiert haben.');
-                    }
-                  }}
+                  className="btn btn-danger" 
+                  style={{ width: '100%', marginTop: '0.5rem' }}
+                  onClick={() => setIsAdmin(false)}
                 >
-                  Daten einspielen
+                  Admin-Modus beenden
                 </button>
+                
               </div>
             </div>
-          </div>
+          )}
           
         </div>
       </main>
