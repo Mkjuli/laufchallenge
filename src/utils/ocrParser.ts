@@ -73,12 +73,9 @@ export function parseOcrText(rawText: string): OcrResult {
 
   // 1. Detect Source App
   const isAppleFitness = normalizedText.includes('fitness') || 
-                         normalizedText.includes('aktivität') || 
                          normalizedText.includes('ringe') || 
-                         normalizedText.includes('workout') || 
                          normalizedText.includes('trainingsdetails') || 
-                         normalizedText.includes('trainingszeit') || 
-                         normalizedText.includes('strecke') || 
+                         (normalizedText.includes('strecke') && normalizedText.includes('trainingszeit')) ||
                          normalizedText.includes('aktivitätskilokalorien');
 
   if (isAppleFitness) {
@@ -272,9 +269,13 @@ export function parseOcrText(rawText: string): OcrResult {
       score += 40;
     }
 
-    // 3. Penalize clock times (usually at the very top of screenshots)
-    if (index < 20) {
-      score -= 80;
+    // 3. Penalize clock times (only 2-part times at the very beginning of the image)
+    if (!t.isThreeParts && index < 35 && !contextText.includes('dauer') && !contextText.includes('trainingszeit')) {
+      score -= 100;
+    }
+    // 3b. Penalize pause durations
+    if (contextText.includes('pause') || contextText.includes('unterbrechung') || contextText.includes('pausenzeit')) {
+      score -= 120;
     }
     // Penalize if it looks like start range
     if (contextText.includes(t.value + '–') || contextText.includes('–' + t.value) || contextText.includes(t.value + '-')) {
