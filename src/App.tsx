@@ -66,7 +66,7 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'loading' | 'synced' | 'saving' | 'error'>('loading');
 
-  const DB_URL = 'https://extendsclass.com/api/json-storage/bin/bbdebde';
+  const DB_URL = '/api/sync';
 
   const fetchFromDatabase = async (showConfetti = false) => {
     setSyncStatus('loading');
@@ -127,7 +127,7 @@ export default function App() {
     setSyncStatus('saving');
     try {
       const response = await fetch(DB_URL, {
-        method: 'PUT',
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
