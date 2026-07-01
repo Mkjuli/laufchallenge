@@ -64,41 +64,82 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'loading' | 'synced' | 'saving' | 'error'>('loading');
 
-  // Load from local storage on mount
-  useEffect(() => {
-    const targetRunners = ['Julian', 'Cedde', 'Tim', 'Joni', 'Malte'];
-    const savedRuns = localStorage.getItem('running_group_runs');
-    
-    // Force reset runners list to the new defaults
-    localStorage.setItem('running_group_runners', JSON.stringify(targetRunners));
-    setRunners(targetRunners);
+  const DB_URL = 'https://extendsclass.com/api/json-storage/bin/bbdebde';
 
-    if (savedRuns) {
-      const parsedRuns = JSON.parse(savedRuns);
-      // Clear out the historical mock runs if they are still in localStorage
-      const hasMockRuns = parsedRuns.some((r: any) => r.id && r.id.startsWith('mock-'));
-      if (hasMockRuns) {
-        setRuns([]);
-        localStorage.setItem('running_group_runs', JSON.stringify([]));
+  const fetchFromDatabase = async (showConfetti = false) => {
+    setSyncStatus('loading');
+    try {
+      const response = await fetch(DB_URL);
+      if (!response.ok) throw new Error('Database response not ok');
+      const data = await response.json();
+      if (data && Array.isArray(data.runs) && Array.isArray(data.runners)) {
+        setRuns(data.runs);
+        setRunners(data.runners);
+        localStorage.setItem('running_group_runs', JSON.stringify(data.runs));
+        localStorage.setItem('running_group_runners', JSON.stringify(data.runners));
+        setSyncStatus('synced');
+        if (showConfetti) {
+          confetti({ particleCount: 30, spread: 40 });
+        }
       } else {
-        setRuns(parsedRuns);
+        throw new Error('Invalid data format');
       }
-    } else {
-      setRuns([]);
-      localStorage.setItem('running_group_runs', JSON.stringify([]));
+    } catch (err) {
+      console.error('Error fetching database:', err);
+      setSyncStatus('error');
+      // Fallback to local storage
+      const savedRuns = localStorage.getItem('running_group_runs');
+      const savedRunners = localStorage.getItem('running_group_runners');
+      if (savedRuns) setRuns(JSON.parse(savedRuns));
+      if (savedRunners) setRunners(JSON.parse(savedRunners));
     }
+  };
+
+  // Load from database on mount & listen for window focus to pull latest data
+  useEffect(() => {
+    fetchFromDatabase();
+
+    const handleFocus = () => {
+      fetchFromDatabase();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+    };
   }, []);
 
-  // Save to local storage whenever runs change
-  const saveRunsToLocalStorage = (updatedRuns: Run[]) => {
+  // Save to database & update local cache
+  const saveRunsToLocalStorage = async (updatedRuns: Run[]) => {
+    // 1. Instant local update
     setRuns(updatedRuns);
     localStorage.setItem('running_group_runs', JSON.stringify(updatedRuns));
     
-    // Dynamically compile runner names to keep lists synced
     const uniqueRunners = Array.from(new Set([...runners, ...updatedRuns.map(r => r.runnerName)]));
     setRunners(uniqueRunners);
     localStorage.setItem('running_group_runners', JSON.stringify(uniqueRunners));
+
+    // 2. Sync online database
+    setSyncStatus('saving');
+    try {
+      const response = await fetch(DB_URL, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          runs: updatedRuns,
+          runners: uniqueRunners
+        })
+      });
+      if (!response.ok) throw new Error('Database PUT error');
+      setSyncStatus('synced');
+    } catch (err) {
+      console.error('Sync failed:', err);
+      setSyncStatus('error');
+    }
   };
 
   // Sync runner lists when runners list updates
@@ -521,9 +562,35 @@ export default function App() {
       <header className="app-header">
         <div className="logo-group">
           <Trophy className="logo-icon" size={36} />
-          <div>
-            <h1>Laufgruppe Dashboard</h1>
-            <p className="subtitle">Verwalte die Läufe deiner Gruppe &amp; exportiere sie als Excel-Tabelle</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <h1 style={{ margin: 0 }}>Laufgruppe Dashboard</h1>
+              <span 
+                className={`sync-badge sync-${syncStatus}`} 
+                onClick={() => fetchFromDatabase(true)} 
+                style={{ 
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  fontSize: '0.75rem',
+                  padding: '0.25rem 0.6rem',
+                  borderRadius: '1rem',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid var(--border-light)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  fontWeight: 500,
+                  transition: 'all 0.2s ease'
+                }} 
+                title="Klicken zum Aktualisieren"
+              >
+                {syncStatus === 'loading' && '☁️ Synchronisiere...'}
+                {syncStatus === 'synced' && '🟢 Live-Daten'}
+                {syncStatus === 'saving' && '☁️ Speichere...'}
+                {syncStatus === 'error' && '🔴 Offline'}
+              </span>
+            </div>
+            <p className="subtitle" style={{ margin: 0 }}>Verwalte die Läufe deiner Gruppe &amp; exportiere sie als Excel-Tabelle</p>
           </div>
         </div>
         
