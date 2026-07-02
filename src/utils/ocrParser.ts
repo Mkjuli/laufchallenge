@@ -416,3 +416,27 @@ export function parseOcrText(rawText: string): OcrResult {
     date
   };
 }
+
+/**
+ * Calculates running challenge distance multiplier based on pace.
+ * Baseline: 7:00 or slower = 1.0x
+ * Max cap: 4:00 or faster = 1.6x
+ * Increment: +0.05 for every 15 seconds faster than 7:00
+ */
+export function calculateMultiplier(paceStr: string): number {
+  if (!paceStr || !paceStr.includes(':')) return 1.0;
+  
+  const paceSecs = paceToSeconds(paceStr);
+  if (paceSecs <= 0) return 1.0;
+
+  const baseline = 7 * 60; // 7:00 pace = 420 seconds
+  const maxCap = 4 * 60;   // 4:00 pace = 240 seconds
+
+  if (paceSecs >= baseline) return 1.0;
+  if (paceSecs <= maxCap) return 1.6;
+
+  const secondsFaster = baseline - paceSecs;
+  // +0.05 for every 15 seconds faster
+  const mult = 1.0 + (secondsFaster / 15) * 0.05;
+  return Math.round(mult * 100) / 100;
+}

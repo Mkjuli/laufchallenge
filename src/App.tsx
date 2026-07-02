@@ -22,7 +22,7 @@ import confetti from 'canvas-confetti';
 import * as XLSX from 'xlsx';
 
 import type { Run, RunnerStats, OcrResult } from './types';
-import { parseOcrText, durationToSeconds, secondsToDuration, secondsToPace } from './utils/ocrParser';
+import { parseOcrText, durationToSeconds, secondsToDuration, secondsToPace, calculateMultiplier } from './utils/ocrParser';
 import { exportToExcel } from './utils/excelExporter';
 
 // Formats date to YYYY-MM-DD
@@ -515,6 +515,8 @@ export default function App() {
   const totalGroupRuns = runs.length;
   
   const totalGroupDistance = runs.reduce((sum, r) => sum + r.distance, 0);
+
+  const totalGroupMultipliedDistance = runs.reduce((sum, r) => sum + (r.distance * calculateMultiplier(r.pace)), 0);
   
   const totalGroupDurationSecs = runs.reduce((sum, r) => sum + durationToSeconds(r.duration), 0);
   
@@ -526,6 +528,7 @@ export default function App() {
   const statsPerRunner: RunnerStats[] = runners.map(name => {
     const runnerRuns = runs.filter(r => r.runnerName.toLowerCase() === name.toLowerCase());
     const totalDist = runnerRuns.reduce((sum, r) => sum + r.distance, 0);
+    const totalMultipliedDist = runnerRuns.reduce((sum, r) => sum + (r.distance * calculateMultiplier(r.pace)), 0);
     const totalSecs = runnerRuns.reduce((sum, r) => sum + durationToSeconds(r.duration), 0);
     const avgPace = totalDist > 0 ? secondsToPace(totalSecs / totalDist) : '0:00';
     
@@ -533,13 +536,14 @@ export default function App() {
       runnerName: name,
       totalRuns: runnerRuns.length,
       totalDistance: Math.round(totalDist * 100) / 100,
+      totalMultipliedDistance: Math.round(totalMultipliedDist * 100) / 100,
       totalDurationSeconds: totalSecs,
       averagePace: avgPace
     };
   }).filter(r => r.totalRuns > 0); // Only show active runners in leaderboard
 
-  // Sort Leaderboard by total distance descending
-  const sortedLeaderboard = [...statsPerRunner].sort((a, b) => b.totalDistance - a.totalDistance);
+  // Sort Leaderboard by total multiplied distance descending
+  const sortedLeaderboard = [...statsPerRunner].sort((a, b) => b.totalMultipliedDistance - a.totalMultipliedDistance);
 
   // Trigger Excel Export
   const handleExport = () => {
@@ -642,15 +646,19 @@ export default function App() {
           <div className="stat-value">{totalGroupRuns}</div>
         </div>
         <div className="stat-box">
-          <div className="stat-label">Gesamtstrecke</div>
+          <div className="stat-label">Gesamtstrecke (Real)</div>
           <div className="stat-value">{totalGroupDistance.toFixed(2)} km</div>
+        </div>
+        <div className="stat-box">
+          <div className="stat-label">Gesamtstrecke mit Multiplikator</div>
+          <div className="stat-value" style={{ color: 'var(--accent-gold)' }}>{totalGroupMultipliedDistance.toFixed(2)} km</div>
         </div>
         <div className="stat-box">
           <div className="stat-label">Gesamtdauer</div>
           <div className="stat-value">{secondsToDuration(totalGroupDurationSecs)}</div>
         </div>
         <div className="stat-box">
-          <div className="stat-label">Gruppen-Durchschnittspace</div>
+          <div className="stat-label">Durchschnitts-Pace</div>
           <div className="stat-value">{averageGroupPace} min/km</div>
         </div>
       </section>
@@ -686,9 +694,13 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    <div className="runner-distance-block">
-                      <div className="runner-distance">{runner.totalDistance.toFixed(2)} km</div>
-                      <div className="runner-pace">Ø Pace: {runner.averagePace} min/km</div>
+                    <div className="runner-distance-block" style={{ textAlign: 'right' }}>
+                      <div className="runner-distance" style={{ color: 'var(--accent-gold)' }}>
+                        {runner.totalMultipliedDistance.toFixed(2)} km
+                      </div>
+                      <div className="runner-pace" style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        Real: {runner.totalDistance.toFixed(2)} km • Ø Pace: {runner.averagePace} min/km
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -726,7 +738,12 @@ export default function App() {
                       <tr key={run.id}>
                         <td>{new Date(run.date).toLocaleDateString('de-DE')}</td>
                         <td style={{ fontWeight: 600 }}>{run.runnerName}</td>
-                        <td style={{ color: 'var(--accent-neon)', fontWeight: 700 }}>{run.distance.toFixed(2)} km</td>
+                        <td style={{ fontWeight: 700 }}>
+                          <div style={{ color: 'var(--text-primary)' }}>{run.distance.toFixed(2)} km</div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--accent-gold)', fontWeight: 500, marginTop: '2px' }} title="Multiplizierte Distanz basierend auf Pace">
+                            Effektiv: {(run.distance * calculateMultiplier(run.pace)).toFixed(2)} km ({calculateMultiplier(run.pace).toFixed(2)}x)
+                          </div>
+                        </td>
                         <td>{run.duration}</td>
                         <td>{run.pace} min/km</td>
                         <td>

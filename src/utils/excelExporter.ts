@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import type { Run, RunnerStats } from '../types';
-import { durationToSeconds, secondsToPace } from './ocrParser';
+import { durationToSeconds, secondsToPace, calculateMultiplier } from './ocrParser';
 
 /**
  * Formats a German date from YYYY-MM-DD to DD.MM.YYYY
@@ -50,7 +50,7 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
   });
 
   // 1. Title Banner
-  ws1.mergeCells('A1:F1');
+  ws1.mergeCells('A1:H1');
   const titleCell = ws1.getCell('A1');
   titleCell.value = 'Laufgruppe - Aktivitätsprotokoll';
   titleCell.font = { name: fontName, size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -66,7 +66,7 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
   ws1.getRow(2).height = 15;
 
   // 2. Table Headers
-  const headers1 = ['Datum', 'Läufer', 'Distanz', 'Dauer', 'Durchschnitts-Pace', 'Quelle / App'];
+  const headers1 = ['Datum', 'Läufer', 'Distanz (Real)', 'Multiplikator', 'Effektive Distanz', 'Dauer', 'Durchschnitts-Pace', 'Quelle / App'];
   ws1.getRow(3).values = headers1;
   ws1.getRow(3).height = 28;
 
@@ -92,10 +92,15 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
     const rowNum = idx + 4; // Data starts at row 4
     const row = ws1.getRow(rowNum);
     
+    const multiplier = calculateMultiplier(run.pace);
+    const effDistance = run.distance * multiplier;
+
     row.values = [
       formatDateGerman(run.date),
       run.runnerName,
       run.distance,
+      multiplier,
+      effDistance,
       run.duration,
       run.pace + ' min/km',
       run.sourceApp
@@ -106,17 +111,27 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
     row.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' }; // Date
     row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };   // Runner
     row.getCell(2).font = { name: fontName, bold: true };
-    row.getCell(3).alignment = { horizontal: 'right', vertical: 'middle' };  // Distance
+    row.getCell(3).alignment = { horizontal: 'right', vertical: 'middle' };  // Distance (Real)
     row.getCell(3).numFmt = '0.00" km"';
-    row.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' }; // Duration
-    row.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };  // Pace
-    row.getCell(6).alignment = { horizontal: 'center', vertical: 'middle' }; // Source
+    row.getCell(4).alignment = { horizontal: 'right', vertical: 'middle' };  // Multiplier
+    row.getCell(4).numFmt = '0.00"x"';
+    row.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };  // Effective Distance
+    row.getCell(5).numFmt = '0.00" km"';
+    row.getCell(5).font = { name: fontName, bold: true };
+    row.getCell(6).alignment = { horizontal: 'center', vertical: 'middle' }; // Duration
+    row.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };  // Pace
+    row.getCell(8).alignment = { horizontal: 'center', vertical: 'middle' }; // Source
 
     // Zebra striping
     const isEven = idx % 2 === 0;
     const rowBg = isEven ? 'FFFFFFFF' : 'FFF8FAFC'; // White vs light Slate-50
     row.eachCell((cell, colNumber) => {
-      cell.font = { name: fontName, size: 10, bold: colNumber === 2 };
+      cell.font = { 
+        name: fontName, 
+        size: 10, 
+        bold: colNumber === 2 || colNumber === 5,
+        color: colNumber === 5 ? { argb: 'FFB45309' } : { argb: 'FF0F172A' } // Muted amber for effective dist
+      };
       cell.fill = {
         type: 'pattern',
         pattern: 'solid',
@@ -137,8 +152,9 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
     sumRow.values = [
       'Gesamt / Schnitt',
       '',
-      // Excel formula for Sum
-      { formula: `SUM(C4:C${sumRowNum - 1})` },
+      { formula: `SUM(C4:C${sumRowNum - 1})` }, // Real Distance Sum
+      '',
+      { formula: `SUM(E4:E${sumRowNum - 1})` }, // Effective Distance Sum
       'Schnitt-Pace:',
       calculateAveragePaceOfRuns(sortedRuns) + ' min/km',
       ''
@@ -162,8 +178,13 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
         cell.alignment = { horizontal: 'right', vertical: 'middle' };
         cell.numFmt = '0.00" km"';
       }
-      if (colIdx === 4) cell.alignment = { horizontal: 'right', vertical: 'middle' };
-      if (colIdx === 5) cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      if (colIdx === 5) {
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        cell.numFmt = '0.00" km"';
+        cell.font = { name: fontName, size: 11, bold: true, color: { argb: 'FFB45309' } };
+      }
+      if (colIdx === 6) cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      if (colIdx === 7) cell.alignment = { horizontal: 'right', vertical: 'middle' };
     });
   }
 
@@ -174,7 +195,7 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
   });
 
   // 1. Title Banner
-  ws2.mergeCells('A1:E1');
+  ws2.mergeCells('A1:F1');
   const titleCell2 = ws2.getCell('A1');
   titleCell2.value = 'Laufgruppe - Bestenliste';
   titleCell2.font = { name: fontName, size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -190,7 +211,7 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
   ws2.getRow(2).height = 15;
 
   // 2. Table Headers
-  const headers2 = ['Rang', 'Läufer', 'Läufe', 'Gesamtdistanz', 'Ø Pace'];
+  const headers2 = ['Rang', 'Läufer', 'Läufe', 'Gesamtdistanz (Real)', 'Gesamtdistanz (Effektiv)', 'Ø Pace'];
   ws2.getRow(3).values = headers2;
   ws2.getRow(3).height = 28;
 
@@ -207,8 +228,8 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
     };
   });
 
-  // Sort Leaderboard
-  const sortedStats = [...stats].sort((a, b) => b.totalDistance - a.totalDistance);
+  // Sort Leaderboard by total multiplied distance descending
+  const sortedStats = [...stats].sort((a, b) => b.totalMultipliedDistance - a.totalMultipliedDistance);
 
   // 3. Add Leaderboard Rows
   sortedStats.forEach((runner, idx) => {
@@ -220,6 +241,7 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
       runner.runnerName,
       runner.totalRuns,
       runner.totalDistance,
+      runner.totalMultipliedDistance,
       runner.averagePace + ' min/km'
     ];
     row.height = 26; // More generous spacing for leaderboard
@@ -229,9 +251,12 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
     row.getCell(2).alignment = { horizontal: 'left', vertical: 'middle' };   // Name
     row.getCell(2).font = { name: fontName, bold: true, size: 11 };
     row.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' }; // Runs
-    row.getCell(4).alignment = { horizontal: 'right', vertical: 'middle' };  // Total Distance
+    row.getCell(4).alignment = { horizontal: 'right', vertical: 'middle' };  // Total Distance Real
     row.getCell(4).numFmt = '0.00" km"';
-    row.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };  // Avg Pace
+    row.getCell(5).alignment = { horizontal: 'right', vertical: 'middle' };  // Total Distance Effective
+    row.getCell(5).numFmt = '0.00" km"';
+    row.getCell(5).font = { name: fontName, bold: true, color: { argb: 'FFB45309' } };
+    row.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };  // Avg Pace
 
     // Highlight top 3 ranks
     const rank = idx + 1;
@@ -257,8 +282,8 @@ export async function exportToExcel(runs: Run[], stats: RunnerStats[]) {
       cell.font = { 
         name: fontName, 
         size: 10, 
-        bold: colIdx === 2 || colIdx === 4 || (colIdx === 1 && isPodium),
-        color: colIdx === 1 && isPodium ? { argb: 'FF' + rankText } : { argb: 'FF0F172A' }
+        bold: colIdx === 2 || colIdx === 5 || (colIdx === 1 && isPodium),
+        color: colIdx === 1 && isPodium ? { argb: 'FF' + rankText } : (colIdx === 5 ? { argb: 'FFB45309' } : { argb: 'FF0F172A' })
       };
       
       // Apply gold/silver/bronze fill to Rank cell specifically

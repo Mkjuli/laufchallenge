@@ -13,6 +13,7 @@ export interface RunnerStats {
   runnerName: string;
   totalRuns: number;
   totalDistance: number;
+  totalMultipliedDistance: number;
   totalDurationSeconds: number;
   averagePace: string; // mm:ss
 }
