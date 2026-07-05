@@ -438,6 +438,6 @@ export function calculateMultiplier(paceStr: string): number {
   const secondsFaster = baseline - paceSecs;
   // +0.05 for every 15 seconds faster
   const mult = 1.0 + (secondsFaster / 15) * 0.05;
-  // Round to the nearest 0.05 step (ends in .0 or .5 at the second decimal place)
-  return Math.round(mult * 20) / 20;
+  // Floor to the next lower 0.05 step (runner must fully achieve the pace to get the multiplier)
+  return Math.floor(mult * 20) / 20;
 }
